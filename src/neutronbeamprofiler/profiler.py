@@ -45,17 +45,21 @@ def get_intersect(A, B, C, D):
 
 
 def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
-            resolution=256, debug=False):
+            resolution=256, vmin=None, vmax=None, nc=17, debug=False):
     """
     :param infile: Input file containing event and linear axis data.
     :param outfile: Output file to save figure.
     :param sampling: Sampling spatial resolution for the slit positions.
     :param resolution: Resolution of final interpolated image.
+    :param vmin: Minimum value for image colorscale.
+    :param vmax: Maximum value for image colorscale.
+    :param nc: Number of contour levels in image.
+    :param debug: Print additional information if true.
     :return: A 2d numpy array containing the data from the image.
     """
 
     # Read events and slit time stamps from file
-    with h5py.File(args.input, "r") as f:
+    with h5py.File(infile, "r") as f:
         event_time = f["/entry/monitor_1/events/event_time_zero"][...]
         ypos = f["/entry/instrument/linear_axis_2/value/value"][...]
         ypos_time = f["/entry/instrument/linear_axis_2/value/time"][...]
@@ -98,18 +102,23 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
 
     # Now create the pixels to sample the positions in 2D.
     # For now we make them square.
+    nx = ny = sampling
     xmin = min(np.amin(actual_pos_list[:, 0]), np.amin(actual_pos_list[:, 1]))
     xmax = max(np.amax(actual_pos_list[:, 0]), np.amax(actual_pos_list[:, 1]))
     # add padding
-    dx = (xmax - xmin) / float(args.nx)
+    dx = (xmax - xmin) / float(nx)
     xmin -= 0.5 * dx
     xmax += 0.5 * dx
-    xe = np.linspace(xmin, xmax, args.nx + 1)
+    xe = np.linspace(xmin, xmax, nx + 1)
     dx = xe[1] - xe[0]
     if debug:
         print("xmin, xmax:", xmin, xmax)
         print("dx:", dx)
         print("x edges:", xe)
+    ymin = xmin
+    ymax = xmax
+    ye = xe
+    dy = dx
 
     # For each event, find positions of linear axes according to the time
     # stamps using numpy linear interpolation
@@ -159,11 +168,8 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
         iy0 = int((p0[1] - ymin) / dy)
         ix1 = int((p1[0] - xmin) / dx)
         iy1 = int((p1[1] - ymin) / dy)
-        # Compute span between the two points
-        deltax = np.abs(ix1 - ix0)
-        deltay = np.abs(iy1 - iy0)
         # Check if we are in the same pixel
-        if deltax + deltay == 0:
+        if ix0 == ix1 and iy0 == iy1:
             if debug:
                 print("Segment is contained in pixel:", ix0, iy0)
             normalization[iy0, ix0] += durations[i]
@@ -175,8 +181,10 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
             # one pixel edge is also an intersection for the neighbouring
             # pixel. Computations could thus be halved by using a smarter
             # scheme.
-            for k in range(iy0, iy1 + 1):
-                for j in range(ix0, ix1 + 1):
+            if debug:
+                print("ix0, ix1, iy0, iy1:", ix0, ix1, iy0, iy1)
+            for k in range(min(iy0, iy1), max(iy0, iy1) + 1):
+                for j in range(min(ix0, ix1), max(ix0, ix1) + 1):
                     if debug:
                         print("j, k:", j, k)
                     intersects = []
@@ -191,10 +199,10 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
                                               pix_corners[(l + 1) % 4])
                         if inter is not None:
                             intersects.append(inter)
+                    if debug:
+                        print("Number of intersects:", len(intersects))
+                        print("Intersects:", intersects)
                     if len(intersects) > 0:
-                        if debug:
-                            print("Number of intersects:", len(intersects))
-                            print("Intersects:", intersects)
                         if len(intersects) > 2:
                             if not np.array_equal(intersects[0],
                                                   intersects[1]):
@@ -224,12 +232,12 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
                                                   intersects[1])
                         dist_sum += dist
                         normalization[k, j] += durations[i] * dist / a_to_b
-                if not np.isclose(dist_sum, a_to_b):
-                    print("Warning: distances did not match:",
-                          dist_sum, a_to_b, dist_sum/a_to_b)
-                if debug:
-                    print("dist_sum, a_to_b, dist_sum/a_to_b:",
-                          dist_sum, a_to_b, dist_sum/a_to_b)
+            if not np.isclose(dist_sum, a_to_b):
+                print("Warning: distances did not match:",
+                      dist_sum, a_to_b, dist_sum/a_to_b)
+            if debug:
+                print("dist_sum, a_to_b, dist_sum/a_to_b:",
+                      dist_sum, a_to_b, dist_sum/a_to_b)
 
 
 
@@ -248,9 +256,15 @@ def profile(infile=None, outfile="beam_profile.pdf", sampling=64,
     # Use scipy interpolation function to make image
     z = griddata(points, count_rates, (grid_x, grid_y), method='linear')
 
+    if vmin is None:
+        vmin = np.nanmin(z)
+    if vmax is None:
+        vmax = np.nanmax(z)
+    levels = np.linspace(vmin, vmax, nc)
+
     # Plot the image
     fig, ax = plt.subplots(1, 1)
-    img = ax.contourf(x, y, z, levels=np.linspace(0, 128, 15), extend='max')
+    img = ax.contourf(x, y, z, levels=levels)
     cb = plt.colorbar(img, ax=ax)
     ax.set_xlabel("Distance x [mm]")
     ax.set_ylabel("Distance y [mm]")
